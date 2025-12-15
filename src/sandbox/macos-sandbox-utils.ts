@@ -685,7 +685,7 @@ export function wrapCommandWithSandboxMacOS(
   })
 
   // Generate proxy environment variables using shared utility
-  const proxyEnv = `export ${generateProxyEnvVars(httpProxyPort, socksProxyPort).join(' ')} && `
+  const proxyEnvArgs = generateProxyEnvVars(httpProxyPort, socksProxyPort)
 
   // Use the user's shell (zsh, bash, etc.) to ensure aliases/snapshots work
   // Resolve the full path to the shell binary
@@ -696,13 +696,17 @@ export function wrapCommandWithSandboxMacOS(
   }
   const shell = shellPathResult.stdout.trim()
 
+  // Use `env` command to set environment variables - each VAR=value is a separate
+  // argument that shellquote handles properly, avoiding shell quoting issues
   const wrappedCommand = shellquote.quote([
+    'env',
+    ...proxyEnvArgs,
     'sandbox-exec',
     '-p',
     profile,
     shell,
     '-c',
-    proxyEnv + command,
+    command,
   ])
 
   logForDebugging(
