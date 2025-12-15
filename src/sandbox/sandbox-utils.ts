@@ -203,8 +203,9 @@ export function generateProxyEnvVars(
     // Configure Git to use SSH through SOCKS proxy (platform-aware)
     if (getPlatform() === 'macos') {
       // macOS has nc available
+      // Note: No outer quotes - bwrap --setenv sets the value directly without shell interpretation
       envVars.push(
-        `GIT_SSH_COMMAND="ssh -o ProxyCommand='nc -X 5 -x localhost:${socksProxyPort} %h %p'"`,
+        `GIT_SSH_COMMAND=ssh -o ProxyCommand='nc -X 5 -x localhost:${socksProxyPort} %h %p'`,
       )
     }
 
