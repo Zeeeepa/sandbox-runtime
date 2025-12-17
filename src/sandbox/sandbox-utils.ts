@@ -160,7 +160,35 @@ export function isSymlinkOutsideBoundary(
     return true
   }
 
-  // Allow resolution to same directory level or deeper
+  // STRICT CHECK: Only allow resolutions that stay within the expected path tree
+  // The resolved path must either:
+  // 1. Start with the original path (deeper/same) - already covered by returning false below
+  // 2. Start with the canonical original (deeper/same under canonical form)
+  // 3. BE the canonical form of the original (e.g., /tmp/x -> /private/tmp/x)
+  // Any other resolution (e.g., /tmp/claude -> /Users/dworken) is outside expected bounds
+
+  const resolvedStartsWithOriginal = normalizedResolved.startsWith(
+    normalizedOriginal + '/',
+  )
+  const resolvedStartsWithCanonical =
+    canonicalOriginal !== normalizedOriginal &&
+    normalizedResolved.startsWith(canonicalOriginal + '/')
+  const resolvedIsCanonical =
+    canonicalOriginal !== normalizedOriginal &&
+    normalizedResolved === canonicalOriginal
+  const resolvedIsSame = normalizedResolved === normalizedOriginal
+
+  // If resolved path is not within expected tree, it's outside boundary
+  if (
+    !resolvedIsSame &&
+    !resolvedIsCanonical &&
+    !resolvedStartsWithOriginal &&
+    !resolvedStartsWithCanonical
+  ) {
+    return true
+  }
+
+  // Allow resolution to same directory level or deeper within expected tree
   return false
 }
 

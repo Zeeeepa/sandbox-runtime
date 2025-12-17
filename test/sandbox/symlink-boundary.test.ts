@@ -352,6 +352,19 @@ describe('isSymlinkOutsideBoundary Unit Tests', () => {
       expect(isSymlinkOutsideBoundary('/var/data', '/var')).toBe(true)
       expect(isSymlinkOutsideBoundary('/usr/local/bin', '/usr')).toBe(true)
     })
+
+    it('should detect when symlink points to unrelated directory', () => {
+      // Symlink pointing to home directory or other unrelated paths
+      expect(isSymlinkOutsideBoundary('/tmp/claude', '/Users/dworken')).toBe(
+        true,
+      )
+      expect(isSymlinkOutsideBoundary('/tmp/claude', '/home/user')).toBe(true)
+      expect(isSymlinkOutsideBoundary('/tmp/claude', '/etc')).toBe(true)
+      expect(isSymlinkOutsideBoundary('/tmp/claude', '/opt/data')).toBe(true)
+      expect(isSymlinkOutsideBoundary('/var/data', '/Users/someone/data')).toBe(
+        true,
+      )
+    })
   })
 
   describe('Valid Resolutions', () => {
