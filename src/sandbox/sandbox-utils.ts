@@ -72,6 +72,127 @@ export function removeTrailingGlobSuffix(pathPattern: string): string {
 }
 
 /**
+ * Check if a symlink resolution crosses expected path boundaries.
+ *
+ * When resolving symlinks for sandbox path normalization, we need to ensure
+ * the resolved path doesn't unexpectedly broaden the scope. This function
+ * returns true if the resolved path is an ancestor of the original path
+ * or resolves to a system root, which would indicate the symlink points
+ * outside expected boundaries.
+ *
+ * @param originalPath - The original path before symlink resolution
+ * @param resolvedPath - The path after fs.realpathSync() resolution
+ * @returns true if the resolved path is outside expected boundaries
+ */
+export function isSymlinkOutsideBoundary(
+  originalPath: string,
+  resolvedPath: string,
+): boolean {
+  const normalizedOriginal = path.normalize(originalPath)
+  const normalizedResolved = path.normalize(resolvedPath)
+
+  // Same path after normalization - OK
+  if (normalizedResolved === normalizedOriginal) {
+    return false
+  }
+
+  // Handle macOS /tmp -> /private/tmp canonical resolution
+  // This is a legitimate system symlink that should be allowed
+  // /tmp/claude -> /private/tmp/claude is OK
+  // /var/folders/... -> /private/var/folders/... is OK
+  if (
+    normalizedOriginal.startsWith('/tmp/') &&
+    normalizedResolved === '/private' + normalizedOriginal
+  ) {
+    return false
+  }
+  if (
+    normalizedOriginal.startsWith('/var/') &&
+    normalizedResolved === '/private' + normalizedOriginal
+  ) {
+    return false
+  }
+  // Also handle the reverse: /private/tmp/... resolving to itself
+  if (
+    normalizedOriginal.startsWith('/private/tmp/') &&
+    normalizedResolved === normalizedOriginal
+  ) {
+    return false
+  }
+  if (
+    normalizedOriginal.startsWith('/private/var/') &&
+    normalizedResolved === normalizedOriginal
+  ) {
+    return false
+  }
+
+  // If resolved path is "/" it's outside expected boundaries
+  if (normalizedResolved === '/') {
+    return true
+  }
+
+  // If resolved path is very short (single component like /tmp, /usr, /var),
+  // it's likely outside expected boundaries
+  const resolvedParts = normalizedResolved.split('/').filter(Boolean)
+  if (resolvedParts.length <= 1) {
+    return true
+  }
+
+  // If original path starts with resolved path, the resolved path is an ancestor
+  // e.g., /tmp/claude -> /tmp means the symlink points to a broader scope
+  if (normalizedOriginal.startsWith(normalizedResolved + '/')) {
+    return true
+  }
+
+  // Also check the canonical form of the original path for macOS
+  // e.g., /tmp/claude should also be checked as /private/tmp/claude
+  let canonicalOriginal = normalizedOriginal
+  if (normalizedOriginal.startsWith('/tmp/')) {
+    canonicalOriginal = '/private' + normalizedOriginal
+  } else if (normalizedOriginal.startsWith('/var/')) {
+    canonicalOriginal = '/private' + normalizedOriginal
+  }
+
+  if (
+    canonicalOriginal !== normalizedOriginal &&
+    canonicalOriginal.startsWith(normalizedResolved + '/')
+  ) {
+    return true
+  }
+
+  // STRICT CHECK: Only allow resolutions that stay within the expected path tree
+  // The resolved path must either:
+  // 1. Start with the original path (deeper/same) - already covered by returning false below
+  // 2. Start with the canonical original (deeper/same under canonical form)
+  // 3. BE the canonical form of the original (e.g., /tmp/x -> /private/tmp/x)
+  // Any other resolution (e.g., /tmp/claude -> /Users/dworken) is outside expected bounds
+
+  const resolvedStartsWithOriginal = normalizedResolved.startsWith(
+    normalizedOriginal + '/',
+  )
+  const resolvedStartsWithCanonical =
+    canonicalOriginal !== normalizedOriginal &&
+    normalizedResolved.startsWith(canonicalOriginal + '/')
+  const resolvedIsCanonical =
+    canonicalOriginal !== normalizedOriginal &&
+    normalizedResolved === canonicalOriginal
+  const resolvedIsSame = normalizedResolved === normalizedOriginal
+
+  // If resolved path is not within expected tree, it's outside boundary
+  if (
+    !resolvedIsSame &&
+    !resolvedIsCanonical &&
+    !resolvedStartsWithOriginal &&
+    !resolvedStartsWithCanonical
+  ) {
+    return true
+  }
+
+  // Allow resolution to same directory level or deeper within expected tree
+  return false
+}
+
+/**
  * Normalize a path for use in sandbox configurations
  * Handles:
  * - Tilde (~) expansion for home directory
@@ -113,9 +234,13 @@ export function normalizePathForSandbox(pathPattern: string): string {
       // Try to resolve symlinks for the base directory
       try {
         const resolvedBaseDir = fs.realpathSync(baseDir)
-        // Reconstruct the pattern with the resolved directory
-        const patternSuffix = normalizedPath.slice(baseDir.length)
-        return resolvedBaseDir + patternSuffix
+        // Validate that resolution stays within expected boundaries
+        if (!isSymlinkOutsideBoundary(baseDir, resolvedBaseDir)) {
+          // Reconstruct the pattern with the resolved directory
+          const patternSuffix = normalizedPath.slice(baseDir.length)
+          return resolvedBaseDir + patternSuffix
+        }
+        // If resolution would broaden scope, keep original pattern
       } catch {
         // If directory doesn't exist or can't be resolved, keep the original pattern
       }
@@ -124,8 +249,16 @@ export function normalizePathForSandbox(pathPattern: string): string {
   }
 
   // Resolve symlinks to real paths to avoid bwrap issues
+  // Validate that the resolution stays within expected boundaries
   try {
-    normalizedPath = fs.realpathSync(normalizedPath)
+    const resolvedPath = fs.realpathSync(normalizedPath)
+
+    // Only use resolved path if it doesn't cross boundary (e.g., symlink to parent dir)
+    if (isSymlinkOutsideBoundary(normalizedPath, resolvedPath)) {
+      // Symlink points outside expected boundaries - keep original path
+    } else {
+      normalizedPath = resolvedPath
+    }
   } catch {
     // If path doesn't exist or can't be resolved, keep the normalized path
   }
