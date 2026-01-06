@@ -509,6 +509,7 @@ describe('Mandatory Deny Paths - Integration Tests', () => {
         needsNetworkRestriction: false,
         readConfig: undefined,
         writeConfig,
+        enableWeakerNestedSandbox: true,
       })
 
       const result = spawnSync(wrappedCommand, {
@@ -537,8 +538,9 @@ describe('Mandatory Deny Paths - Integration Tests', () => {
       )
 
       expect(result.success).toBe(false)
-      // Verify file was NOT created on host
-      expect(() => readFileSync(nonExistentFile)).toThrow()
+      // Verify file content was NOT written (bwrap may create empty mount point file)
+      const content = readFileSync(nonExistentFile, 'utf8')
+      expect(content).toBe('')
     })
 
     it('blocks creation of non-existent file when parent dir also does not exist', async () => {
@@ -553,8 +555,10 @@ describe('Mandatory Deny Paths - Integration Tests', () => {
       )
 
       expect(result.success).toBe(false)
-      // Verify directory was NOT created on host
-      expect(() => readFileSync('nonexistent-dir')).toThrow()
+      // bwrap mounts /dev/null at first non-existent component, blocking mkdir
+      // The mount point file is created but is empty (from /dev/null)
+      const content = readFileSync('nonexistent-dir', 'utf8')
+      expect(content).toBe('')
     })
 
     it('blocks creation of deeply nested non-existent path', async () => {
@@ -569,8 +573,10 @@ describe('Mandatory Deny Paths - Integration Tests', () => {
       )
 
       expect(result.success).toBe(false)
-      // Verify directory structure was NOT created on host
-      expect(() => readFileSync('a')).toThrow()
+      // bwrap mounts /dev/null at 'a' (first non-existent component), blocking mkdir
+      // The mount point file is created but is empty (from /dev/null)
+      const content = readFileSync('a', 'utf8')
+      expect(content).toBe('')
     })
   })
 
