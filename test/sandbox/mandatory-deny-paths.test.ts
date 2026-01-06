@@ -478,6 +478,94 @@ describe('Mandatory Deny Paths - Integration Tests', () => {
       )
     })
   })
+
+  describe('Non-existent deny path protection (Linux only)', () => {
+    // This tests the fix for sandbox escape via creating non-existent deny paths
+    // Only applicable to Linux since it uses /dev/null mounting
+
+    async function runSandboxedWriteWithDenyPaths(
+      command: string,
+      denyPaths: string[],
+    ): Promise<{ success: boolean; stdout: string; stderr: string }> {
+      const platform = getPlatform()
+      if (platform !== 'linux') {
+        return { success: true, stdout: '', stderr: '' }
+      }
+
+      const writeConfig = {
+        allowOnly: ['.'],
+        denyWithinAllow: denyPaths,
+      }
+
+      const wrappedCommand = await wrapCommandWithSandboxLinux({
+        command,
+        needsNetworkRestriction: false,
+        readConfig: undefined,
+        writeConfig,
+      })
+
+      const result = spawnSync(wrappedCommand, {
+        shell: true,
+        encoding: 'utf8',
+        timeout: 10000,
+      })
+
+      return {
+        success: result.status === 0,
+        stdout: result.stdout || '',
+        stderr: result.stderr || '',
+      }
+    }
+
+    it('blocks creation of non-existent file when parent dir exists', async () => {
+      if (getPlatform() !== 'linux') return
+
+      // .claude directory exists from beforeAll setup
+      // .claude/settings.json does NOT exist
+      const nonExistentFile = '.claude/settings.json'
+
+      const result = await runSandboxedWriteWithDenyPaths(
+        `echo '{"hooks":{}}' > '${nonExistentFile}'`,
+        [join(TEST_DIR, nonExistentFile)],
+      )
+
+      expect(result.success).toBe(false)
+      // Verify file was NOT created on host
+      expect(() => readFileSync(nonExistentFile)).toThrow()
+    })
+
+    it('blocks creation of non-existent file when parent dir also does not exist', async () => {
+      if (getPlatform() !== 'linux') return
+
+      // nonexistent-dir does NOT exist
+      const nonExistentPath = 'nonexistent-dir/settings.json'
+
+      const result = await runSandboxedWriteWithDenyPaths(
+        `mkdir -p nonexistent-dir && echo '{"hooks":{}}' > '${nonExistentPath}'`,
+        [join(TEST_DIR, nonExistentPath)],
+      )
+
+      expect(result.success).toBe(false)
+      // Verify directory was NOT created on host
+      expect(() => readFileSync('nonexistent-dir')).toThrow()
+    })
+
+    it('blocks creation of deeply nested non-existent path', async () => {
+      if (getPlatform() !== 'linux') return
+
+      // a/b/c/file.txt does NOT exist
+      const nonExistentPath = 'a/b/c/file.txt'
+
+      const result = await runSandboxedWriteWithDenyPaths(
+        `mkdir -p a/b/c && echo 'test' > '${nonExistentPath}'`,
+        [join(TEST_DIR, nonExistentPath)],
+      )
+
+      expect(result.success).toBe(false)
+      // Verify directory structure was NOT created on host
+      expect(() => readFileSync('a')).toThrow()
+    })
+  })
 })
 
 describe('macGetMandatoryDenyPatterns - Unit Tests', () => {
