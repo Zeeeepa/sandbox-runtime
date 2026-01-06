@@ -59,6 +59,46 @@ export interface LinuxSandboxParams {
 const DEFAULT_MANDATORY_DENY_SEARCH_DEPTH = 3
 
 /**
+ * Find if any component of the path is a symlink within the allowed write paths.
+ * Returns the symlink path if found, or null if no symlinks.
+ *
+ * This is used to detect and block symlink replacement attacks where an attacker
+ * could delete a symlink and create a real directory with malicious content.
+ */
+function findSymlinkInPath(
+  targetPath: string,
+  allowedWritePaths: string[],
+): string | null {
+  const parts = targetPath.split(path.sep)
+  let currentPath = ''
+
+  for (const part of parts) {
+    if (!part) continue // Skip empty parts (leading /)
+    const nextPath = currentPath + path.sep + part
+
+    try {
+      const stats = fs.lstatSync(nextPath)
+      if (stats.isSymbolicLink()) {
+        // Check if this symlink is within an allowed write path
+        const isWithinAllowedPath = allowedWritePaths.some(
+          allowedPath =>
+            nextPath.startsWith(allowedPath + '/') || nextPath === allowedPath,
+        )
+        if (isWithinAllowedPath) {
+          return nextPath
+        }
+      }
+    } catch {
+      // Path doesn't exist - no symlink issue here
+      break
+    }
+    currentPath = nextPath
+  }
+
+  return null
+}
+
+/**
  * Find the first non-existent path component.
  * E.g., for "/existing/parent/nonexistent/child/file.txt" where /existing/parent exists,
  * returns "/existing/parent/nonexistent"
@@ -539,6 +579,19 @@ async function generateFilesystemArgs(
 
       // Skip /dev/* paths since --dev /dev already handles them
       if (normalizedPath.startsWith('/dev/')) {
+        continue
+      }
+
+      // Check for symlinks in the path - if any parent component is a symlink,
+      // mount /dev/null there to prevent symlink replacement attacks.
+      // Attack scenario: .claude is a symlink to ./decoy/, attacker deletes
+      // symlink and creates real .claude/settings.json with malicious hooks.
+      const symlinkInPath = findSymlinkInPath(normalizedPath, allowedWritePaths)
+      if (symlinkInPath) {
+        args.push('--ro-bind', '/dev/null', symlinkInPath)
+        logForDebugging(
+          `[Sandbox Linux] Mounted /dev/null at symlink ${symlinkInPath} to prevent symlink replacement attack`,
+        )
         continue
       }
 
