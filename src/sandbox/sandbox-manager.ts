@@ -336,7 +336,8 @@ function checkDependencies(ripgrepConfig?: {
   // Platform-specific dependency checks
   if (platform === 'linux') {
     const allowAllUnixSockets = config?.network?.allowAllUnixSockets ?? false
-    return hasLinuxSandboxDependenciesSync(allowAllUnixSockets)
+    const seccompConfig = config?.seccomp
+    return hasLinuxSandboxDependenciesSync(allowAllUnixSockets, seccompConfig)
   }
 
   // macOS only needs ripgrep (already checked above)
@@ -444,6 +445,12 @@ function getMandatoryDenySearchDepth(): number {
 
 function getAllowGitConfig(): boolean {
   return config?.filesystem?.allowGitConfig ?? false
+}
+
+function getSeccompConfig():
+  | { bpfPath?: string; applyPath?: string }
+  | undefined {
+  return config?.seccomp
 }
 
 function getProxyPort(): number | undefined {
@@ -580,6 +587,7 @@ async function wrapWithSandbox(
         ripgrepConfig: getRipgrepConfig(),
         mandatoryDenySearchDepth: getMandatoryDenySearchDepth(),
         allowGitConfig: getAllowGitConfig(),
+        seccompConfig: getSeccompConfig(),
         abortSignal,
       })
 

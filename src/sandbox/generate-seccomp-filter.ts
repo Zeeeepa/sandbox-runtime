@@ -54,11 +54,27 @@ function getVendorArchitecture(): string | null {
  * - vendor/seccomp/{x64,arm64}/unix-block.bpf
  *
  * Tries multiple paths for resilience:
+ * 0. Expected path provided via parameter (checked first if provided)
  * 1. vendor/seccomp/{arch}/unix-block.bpf (bundled - when bundled into consuming packages)
  * 2. ../../vendor/seccomp/{arch}/unix-block.bpf (package root - standard npm installs)
  * 3. ../vendor/seccomp/{arch}/unix-block.bpf (dist/vendor - for bundlers)
+ *
+ * @param expectedPath - Optional path to check first (highest priority)
  */
-export function getPreGeneratedBpfPath(): string | null {
+export function getPreGeneratedBpfPath(expectedPath?: string): string | null {
+  // Check expected path first (highest priority)
+  if (expectedPath) {
+    if (fs.existsSync(expectedPath)) {
+      logForDebugging(
+        `[SeccompFilter] Using BPF filter from expected path: ${expectedPath}`,
+      )
+      return expectedPath
+    }
+    logForDebugging(
+      `[SeccompFilter] Expected path provided but file not found: ${expectedPath}`,
+    )
+  }
+
   // Determine architecture
   const arch = getVendorArchitecture()
   if (!arch) {
@@ -105,11 +121,29 @@ export function getPreGeneratedBpfPath(): string | null {
  * - vendor/seccomp/{x64,arm64}/apply-seccomp
  *
  * Tries multiple paths for resilience:
+ * 0. Expected path provided via parameter (checked first if provided)
  * 1. vendor/seccomp/{arch}/apply-seccomp (bundled - when bundled into consuming packages)
  * 2. ../../vendor/seccomp/{arch}/apply-seccomp (package root - standard npm installs)
  * 3. ../vendor/seccomp/{arch}/apply-seccomp (dist/vendor - for bundlers)
+ *
+ * @param expectedPath - Optional path to check first (highest priority)
  */
-export function getApplySeccompBinaryPath(): string | null {
+export function getApplySeccompBinaryPath(
+  expectedPath?: string,
+): string | null {
+  // Check expected path first (highest priority)
+  if (expectedPath) {
+    if (fs.existsSync(expectedPath)) {
+      logForDebugging(
+        `[SeccompFilter] Using apply-seccomp binary from expected path: ${expectedPath}`,
+      )
+      return expectedPath
+    }
+    logForDebugging(
+      `[SeccompFilter] Expected path provided but file not found: ${expectedPath}`,
+    )
+  }
+
   // Determine architecture
   const arch = getVendorArchitecture()
   if (!arch) {
@@ -171,10 +205,11 @@ export function getApplySeccompBinaryPath(): string | null {
  * - Pre-generated BPF filters included for x64 and ARM64 only
  * - Other architectures are not supported
  *
+ * @param expectedPath - Optional path to check first (highest priority)
  * @returns Path to the pre-generated BPF filter file, or null if not available
  */
-export function generateSeccompFilter(): string | null {
-  const preGeneratedBpf = getPreGeneratedBpfPath()
+export function generateSeccompFilter(expectedPath?: string): string | null {
+  const preGeneratedBpf = getPreGeneratedBpfPath(expectedPath)
   if (preGeneratedBpf) {
     logForDebugging('[SeccompFilter] Using pre-generated BPF filter')
     return preGeneratedBpf

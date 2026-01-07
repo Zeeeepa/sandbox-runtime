@@ -623,3 +623,140 @@ describe('Error Handling', () => {
     ).not.toThrow()
   })
 })
+
+describe('Custom Seccomp Paths (expectedPath parameter)', () => {
+  it('should use expectedPath for BPF when provided and file exists', () => {
+    if (skipIfNotLinux()) {
+      return
+    }
+
+    const realPath = getPreGeneratedBpfPath()
+    if (!realPath) {
+      // Skip if no real BPF available on this architecture
+      return
+    }
+
+    // Use the real path as expectedPath - should return it directly
+    const result = getPreGeneratedBpfPath(realPath)
+    expect(result).toBe(realPath)
+  })
+
+  it('should use expectedPath for apply-seccomp when provided and file exists', () => {
+    if (skipIfNotLinux()) {
+      return
+    }
+
+    const realPath = getApplySeccompBinaryPath()
+    if (!realPath) {
+      // Skip if no real binary available on this architecture
+      return
+    }
+
+    // Use the real path as expectedPath - should return it directly
+    const result = getApplySeccompBinaryPath(realPath)
+    expect(result).toBe(realPath)
+  })
+
+  it('should fall back to default paths when expectedPath for BPF does not exist', () => {
+    if (skipIfNotLinux()) {
+      return
+    }
+
+    const nonExistentPath = '/tmp/nonexistent-seccomp.bpf'
+    const result = getPreGeneratedBpfPath(nonExistentPath)
+
+    // Should fall back to vendor path (or null if arch not supported)
+    const arch = process.arch
+    if (arch === 'x64' || arch === 'arm64') {
+      expect(result).toBeTruthy()
+      expect(result).toContain('vendor/seccomp')
+    } else {
+      expect(result).toBeNull()
+    }
+  })
+
+  it('should fall back to default paths when expectedPath for apply-seccomp does not exist', () => {
+    if (skipIfNotLinux()) {
+      return
+    }
+
+    const nonExistentPath = '/tmp/nonexistent-apply-seccomp'
+    const result = getApplySeccompBinaryPath(nonExistentPath)
+
+    // Should fall back to vendor path (or null if arch not supported)
+    const arch = process.arch
+    if (arch === 'x64' || arch === 'arm64') {
+      expect(result).toBeTruthy()
+      expect(result).toContain('vendor/seccomp')
+    } else {
+      expect(result).toBeNull()
+    }
+  })
+
+  it('should pass seccompConfig through wrapCommandWithSandboxLinux', async () => {
+    if (skipIfNotLinux()) {
+      return
+    }
+
+    if (!hasLinuxSandboxDependenciesSync()) {
+      return
+    }
+
+    // Pass custom paths that don't exist - should fall back to defaults
+    // Need filesystem restriction so command actually gets wrapped
+    const wrappedCommand = await wrapCommandWithSandboxLinux({
+      command: 'echo test',
+      needsNetworkRestriction: false,
+      writeConfig: {
+        allowOnly: ['/tmp'],
+        denyWithinAllow: [],
+      },
+      seccompConfig: {
+        bpfPath: '/custom/nonexistent/path.bpf',
+        applyPath: '/custom/nonexistent/apply-seccomp',
+      },
+    })
+
+    // Should still work (falls back to defaults since custom paths don't exist)
+    expect(wrappedCommand).toBeTruthy()
+    expect(wrappedCommand).toContain('bwrap')
+  })
+
+  it('should use custom seccompConfig paths when they exist', async () => {
+    if (skipIfNotLinux()) {
+      return
+    }
+
+    if (!hasLinuxSandboxDependenciesSync()) {
+      return
+    }
+
+    // Get the real paths
+    const realBpfPath = getPreGeneratedBpfPath()
+    const realApplyPath = getApplySeccompBinaryPath()
+
+    if (!realBpfPath || !realApplyPath) {
+      return
+    }
+
+    // Pass the real paths as custom config - should use them
+    // Need filesystem restriction so command actually gets wrapped
+    const wrappedCommand = await wrapCommandWithSandboxLinux({
+      command: 'echo test',
+      needsNetworkRestriction: false,
+      writeConfig: {
+        allowOnly: ['/tmp'],
+        denyWithinAllow: [],
+      },
+      seccompConfig: {
+        bpfPath: realBpfPath,
+        applyPath: realApplyPath,
+      },
+    })
+
+    expect(wrappedCommand).toBeTruthy()
+    // The command should contain bwrap and the apply-seccomp binary path
+    expect(wrappedCommand).toContain('bwrap')
+    expect(wrappedCommand).toContain('apply-seccomp')
+  })
+})
