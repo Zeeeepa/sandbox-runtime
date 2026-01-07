@@ -51,6 +51,8 @@ export interface LinuxSandboxParams {
   mandatoryDenySearchDepth?: number
   /** Allow writes to .git/config files (default: false) */
   allowGitConfig?: boolean
+  /** Custom seccomp binary paths */
+  seccompConfig?: { bpfPath?: string; applyPath?: string }
   /** Abort signal to cancel the ripgrep scan */
   abortSignal?: AbortSignal
 }
@@ -198,6 +200,7 @@ function registerSeccompCleanupHandler(): void {
  */
 export function hasLinuxSandboxDependenciesSync(
   allowAllUnixSockets = false,
+  seccompConfig?: { bpfPath?: string; applyPath?: string },
 ): boolean {
   try {
     const bwrapResult = spawnSync('which', ['bwrap'], {
@@ -214,10 +217,12 @@ export function hasLinuxSandboxDependenciesSync(
     // Check for seccomp dependencies (optional security feature)
     if (!allowAllUnixSockets) {
       // Check if we have a pre-generated BPF filter for this architecture
-      const hasPreGeneratedBpf = getPreGeneratedBpfPath() !== null
+      const hasPreGeneratedBpf =
+        getPreGeneratedBpfPath(seccompConfig?.bpfPath) !== null
 
       // Check if we have the apply-seccomp binary for this architecture
-      const hasApplySeccompBinary = getApplySeccompBinaryPath() !== null
+      const hasApplySeccompBinary =
+        getApplySeccompBinaryPath(seccompConfig?.applyPath) !== null
 
       if (!hasPreGeneratedBpf || !hasApplySeccompBinary) {
         // Seccomp not available - log warning but continue with basic sandbox
@@ -401,6 +406,7 @@ function buildSandboxCommand(
   userCommand: string,
   seccompFilterPath: string | undefined,
   shell?: string,
+  applySeccompPath?: string,
 ): string {
   // Default to bash for backward compatibility
   const shellPath = shell || 'bash'
@@ -423,7 +429,7 @@ function buildSandboxCommand(
     // - Execs the user command
     //
     // This is simpler and more portable than nested bwrap, with no FD redirects needed.
-    const applySeccompBinary = getApplySeccompBinaryPath()
+    const applySeccompBinary = getApplySeccompBinaryPath(applySeccompPath)
     if (!applySeccompBinary) {
       throw new Error(
         'apply-seccomp binary not found. This should have been caught earlier. ' +
@@ -642,6 +648,7 @@ export async function wrapCommandWithSandboxLinux(
     ripgrepConfig = { command: 'rg' },
     mandatoryDenySearchDepth = DEFAULT_MANDATORY_DENY_SEARCH_DEPTH,
     allowGitConfig = false,
+    seccompConfig,
     abortSignal,
   } = params
 
@@ -670,7 +677,8 @@ export async function wrapCommandWithSandboxLinux(
     // NOTE: Seccomp filtering is only enabled when allowAllUnixSockets is false
     // (when true, Unix sockets are allowed)
     if (!allowAllUnixSockets) {
-      seccompFilterPath = generateSeccompFilter() ?? undefined
+      seccompFilterPath =
+        generateSeccompFilter(seccompConfig?.bpfPath) ?? undefined
       if (!seccompFilterPath) {
         // Seccomp not available - log warning and continue without it
         // This provides graceful degradation on systems without seccomp binaries
@@ -813,12 +821,15 @@ export async function wrapCommandWithSandboxLinux(
         command,
         seccompFilterPath,
         shell,
+        seccompConfig?.applyPath,
       )
       bwrapArgs.push(sandboxCommand)
     } else if (seccompFilterPath) {
       // No network restrictions but we have seccomp - use apply-seccomp directly
       // apply-seccomp is a simple C program that applies the seccomp filter and execs the command
-      const applySeccompBinary = getApplySeccompBinaryPath()
+      const applySeccompBinary = getApplySeccompBinaryPath(
+        seccompConfig?.applyPath,
+      )
       if (!applySeccompBinary) {
         throw new Error(
           'apply-seccomp binary not found. This should have been caught earlier. ' +
