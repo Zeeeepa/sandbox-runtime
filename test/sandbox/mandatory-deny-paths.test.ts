@@ -1,6 +1,13 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'bun:test'
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
+import {
+  mkdirSync,
+  rmSync,
+  writeFileSync,
+  readFileSync,
+  symlinkSync,
+  existsSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { getPlatform } from '../../src/utils/platform.js'
@@ -476,6 +483,204 @@ describe('Mandatory Deny Paths - Integration Tests', () => {
       expect(readFileSync('.git/hooks/pre-commit', 'utf8')).toBe(
         ORIGINAL_CONTENT,
       )
+    })
+  })
+
+  describe('Non-existent deny path protection (Linux only)', () => {
+    // This tests the fix for sandbox escape via creating non-existent deny paths
+    // Only applicable to Linux since it uses /dev/null mounting
+
+    async function runSandboxedWriteWithDenyPaths(
+      command: string,
+      denyPaths: string[],
+    ): Promise<{ success: boolean; stdout: string; stderr: string }> {
+      const platform = getPlatform()
+      if (platform !== 'linux') {
+        return { success: true, stdout: '', stderr: '' }
+      }
+
+      const writeConfig = {
+        allowOnly: ['.'],
+        denyWithinAllow: denyPaths,
+      }
+
+      const wrappedCommand = await wrapCommandWithSandboxLinux({
+        command,
+        needsNetworkRestriction: false,
+        readConfig: undefined,
+        writeConfig,
+        enableWeakerNestedSandbox: true,
+      })
+
+      const result = spawnSync(wrappedCommand, {
+        shell: true,
+        encoding: 'utf8',
+        timeout: 10000,
+      })
+
+      return {
+        success: result.status === 0,
+        stdout: result.stdout || '',
+        stderr: result.stderr || '',
+      }
+    }
+
+    it('blocks creation of non-existent file when parent dir exists', async () => {
+      if (getPlatform() !== 'linux') return
+
+      // .claude directory exists from beforeAll setup
+      // .claude/settings.json does NOT exist
+      const nonExistentFile = '.claude/settings.json'
+
+      const result = await runSandboxedWriteWithDenyPaths(
+        `echo '{"hooks":{}}' > '${nonExistentFile}'`,
+        [join(TEST_DIR, nonExistentFile)],
+      )
+
+      expect(result.success).toBe(false)
+      // Verify file content was NOT written (bwrap may create empty mount point file)
+      const content = readFileSync(nonExistentFile, 'utf8')
+      expect(content).toBe('')
+    })
+
+    it('blocks creation of non-existent file when parent dir also does not exist', async () => {
+      if (getPlatform() !== 'linux') return
+
+      // nonexistent-dir does NOT exist
+      const nonExistentPath = 'nonexistent-dir/settings.json'
+
+      const result = await runSandboxedWriteWithDenyPaths(
+        `mkdir -p nonexistent-dir && echo '{"hooks":{}}' > '${nonExistentPath}'`,
+        [join(TEST_DIR, nonExistentPath)],
+      )
+
+      expect(result.success).toBe(false)
+      // bwrap mounts /dev/null at first non-existent component, blocking mkdir
+      // The mount point file is created but is empty (from /dev/null)
+      const content = readFileSync('nonexistent-dir', 'utf8')
+      expect(content).toBe('')
+    })
+
+    it('blocks creation of deeply nested non-existent path', async () => {
+      if (getPlatform() !== 'linux') return
+
+      // a/b/c/file.txt does NOT exist
+      const nonExistentPath = 'a/b/c/file.txt'
+
+      const result = await runSandboxedWriteWithDenyPaths(
+        `mkdir -p a/b/c && echo 'test' > '${nonExistentPath}'`,
+        [join(TEST_DIR, nonExistentPath)],
+      )
+
+      expect(result.success).toBe(false)
+      // bwrap mounts /dev/null at 'a' (first non-existent component), blocking mkdir
+      // The mount point file is created but is empty (from /dev/null)
+      const content = readFileSync('a', 'utf8')
+      expect(content).toBe('')
+    })
+  })
+
+  describe('Symlink replacement attack protection (Linux only)', () => {
+    // This tests the fix for symlink replacement attacks where an attacker
+    // could delete a symlink and create a real directory with malicious content
+
+    async function runSandboxedCommandWithDenyPaths(
+      command: string,
+      denyPaths: string[],
+    ): Promise<{ success: boolean; stdout: string; stderr: string }> {
+      const platform = getPlatform()
+      if (platform !== 'linux') {
+        return { success: true, stdout: '', stderr: '' }
+      }
+
+      const writeConfig = {
+        allowOnly: ['.'],
+        denyWithinAllow: denyPaths,
+      }
+
+      const wrappedCommand = await wrapCommandWithSandboxLinux({
+        command,
+        needsNetworkRestriction: false,
+        readConfig: undefined,
+        writeConfig,
+      })
+
+      const result = spawnSync(wrappedCommand, {
+        shell: true,
+        encoding: 'utf8',
+        timeout: 10000,
+      })
+
+      return {
+        success: result.status === 0,
+        stdout: result.stdout || '',
+        stderr: result.stderr || '',
+      }
+    }
+
+    it('blocks symlink replacement attack on .claude directory', async () => {
+      if (getPlatform() !== 'linux') return
+
+      // Setup: Create a symlink .claude -> decoy (simulating malicious git repo)
+      const decoyDir = 'symlink-decoy'
+      const claudeSymlink = 'symlink-claude'
+      mkdirSync(decoyDir, { recursive: true })
+      writeFileSync(join(decoyDir, 'settings.json'), '{}')
+      symlinkSync(decoyDir, claudeSymlink)
+
+      try {
+        // The deny path is the settings.json through the symlink
+        const denyPath = join(TEST_DIR, claudeSymlink, 'settings.json')
+
+        // Attacker tries to:
+        // 1. Delete the symlink
+        // 2. Create a real directory
+        // 3. Create malicious settings.json
+        const result = await runSandboxedCommandWithDenyPaths(
+          `rm ${claudeSymlink} && mkdir ${claudeSymlink} && echo '{"hooks":{}}' > ${claudeSymlink}/settings.json`,
+          [denyPath],
+        )
+
+        // The attack should fail - symlink is protected with /dev/null mount
+        expect(result.success).toBe(false)
+
+        // Verify the symlink still exists on host (was not deleted)
+        expect(existsSync(claudeSymlink)).toBe(true)
+      } finally {
+        // Cleanup
+        rmSync(claudeSymlink, { force: true })
+        rmSync(decoyDir, { recursive: true, force: true })
+      }
+    })
+
+    it('blocks deletion of symlink in protected path', async () => {
+      if (getPlatform() !== 'linux') return
+
+      // Setup: Create a symlink
+      const targetDir = 'symlink-target-dir'
+      const symlinkPath = 'protected-symlink'
+      mkdirSync(targetDir, { recursive: true })
+      writeFileSync(join(targetDir, 'file.txt'), 'content')
+      symlinkSync(targetDir, symlinkPath)
+
+      try {
+        const denyPath = join(TEST_DIR, symlinkPath, 'file.txt')
+
+        // Try to just delete the symlink
+        const result = await runSandboxedCommandWithDenyPaths(
+          `rm ${symlinkPath}`,
+          [denyPath],
+        )
+
+        // Should fail - symlink is mounted with /dev/null
+        expect(result.success).toBe(false)
+
+        // Symlink should still exist
+        expect(existsSync(symlinkPath)).toBe(true)
+      } finally {
+        rmSync(symlinkPath, { force: true })
+        rmSync(targetDir, { recursive: true, force: true })
+      }
     })
   })
 })
