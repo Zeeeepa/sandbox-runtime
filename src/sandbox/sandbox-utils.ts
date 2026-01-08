@@ -298,8 +298,8 @@ export function generateProxyEnvVars(
   httpProxyPort?: number,
   socksProxyPort?: number,
 ): string[] {
-  // Respect existing TMPDIR if set, otherwise default to /tmp/claude
-  const tmpdir = process.env.TMPDIR || '/tmp/claude'
+  // Respect CLAUDE_TMPDIR if set, otherwise default to /tmp/claude
+  const tmpdir = process.env.CLAUDE_TMPDIR || '/tmp/claude'
   const envVars: string[] = [`SANDBOX_RUNTIME=1`, `TMPDIR=${tmpdir}`]
 
   // If no proxy ports provided, return minimal env vars
