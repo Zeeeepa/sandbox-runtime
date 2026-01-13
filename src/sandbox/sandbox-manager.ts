@@ -520,19 +520,15 @@ async function wrapWithSandbox(
     customConfig?.network?.allowedDomains !== undefined ||
     config?.network?.allowedDomains !== undefined
 
-  // Get the actual allowed domains list for proxy filtering
-  const allowedDomains =
-    customConfig?.network?.allowedDomains ??
-    config?.network.allowedDomains ??
-    []
-
   // Network RESTRICTION is needed whenever network config is specified
   // This includes empty allowedDomains which means "block all network"
   const needsNetworkRestriction = hasNetworkConfig
 
-  // Network PROXY is only needed when there are domains to filter
-  // If allowedDomains is empty, we block all network and don't need the proxy
-  const needsNetworkProxy = allowedDomains.length > 0
+  // Network PROXY is needed whenever network config is specified
+  // Even with empty allowedDomains, we route through proxy so that:
+  // 1. updateConfig() can enable network access for already-running processes
+  // 2. The proxy blocks all requests when allowlist is empty
+  const needsNetworkProxy = hasNetworkConfig
 
   // Wait for network initialization only if proxy is actually needed
   if (needsNetworkProxy) {
