@@ -1122,7 +1122,7 @@ describe('Empty allowedDomains Network Blocking Integration', () => {
       // curl should fail with network-related error
       const output = (result.stdout + result.stderr).toLowerCase()
 
-      // Network should fail - either connection error, timeout, or "network_failed" echo
+      // Network should fail - either connection error, timeout, proxy rejection, or "network_failed" echo
       const networkBlocked =
         output.includes('network_failed') ||
         output.includes("couldn't connect") ||
@@ -1131,6 +1131,7 @@ describe('Empty allowedDomains Network Blocking Integration', () => {
         output.includes('name or service not known') ||
         output.includes('timed out') ||
         output.includes('connection timed out') ||
+        output.includes('blocked by') ||
         result.status !== 0
 
       expect(networkBlocked).toBe(true)
@@ -1165,6 +1166,7 @@ describe('Empty allowedDomains Network Blocking Integration', () => {
         output.includes('network is unreachable') ||
         output.includes('name or service not known') ||
         output.includes('timed out') ||
+        output.includes('blocked by') ||
         result.status !== 0
 
       expect(networkBlocked).toBe(true)
