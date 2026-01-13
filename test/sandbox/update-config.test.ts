@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach } from 'vitest'
 import { SandboxManager } from '../../src/index.js'
 import { connect } from 'net'
 import { spawnSync } from 'child_process'
@@ -46,8 +46,37 @@ function proxyRequest(
 }
 
 describe('SandboxManager.updateConfig', () => {
+  beforeEach(async () => {
+    await SandboxManager.reset()
+  })
+
   afterEach(async () => {
     await SandboxManager.reset()
+  })
+
+  it('should handle updateConfig called before initialize', async () => {
+    // updateConfig before initialize - should not throw
+    SandboxManager.updateConfig({
+      network: { allowedDomains: ['example.com'], deniedDomains: [] },
+      filesystem: { denyRead: [], allowWrite: [], denyWrite: [] },
+    })
+
+    // Config should be set
+    expect(SandboxManager.getConfig()).toBeDefined()
+
+    // But network infrastructure not ready
+    expect(SandboxManager.getProxyPort()).toBeUndefined()
+
+    // Initialize should still work and respect the pre-set config
+    await SandboxManager.initialize({
+      network: { allowedDomains: ['other.com'], deniedDomains: [] },
+      filesystem: { denyRead: [], allowWrite: [], denyWrite: [] },
+    })
+
+    // initialize() overwrites config
+    const config = SandboxManager.getConfig()
+    expect(config?.network.allowedDomains).toContain('other.com')
+    expect(config?.network.allowedDomains).not.toContain('example.com')
   })
 
   it('should update network restriction config dynamically', async () => {
@@ -253,8 +282,8 @@ describe('SandboxManager.updateConfig proxy filtering', () => {
 })
 
 /**
- * Integration tests using wrapWithSandbox() + actual curl commands
- * These test the full flow including sandbox wrapper generation
+ * Integration tests using wrapWithSandbox() to verify sandbox wrapper generation
+ * and actual network behavior with sandboxed curl commands.
  */
 describe('SandboxManager.updateConfig integration (wrapWithSandbox)', () => {
   function skipIfNotLinux(): boolean {
@@ -352,30 +381,24 @@ describe('SandboxManager.updateConfig integration (wrapWithSandbox)', () => {
     expect(output2).not.toContain('example domain')
   })
 
-  it('should handle multiple config updates with sandboxed commands', async () => {
+  it('should allow network via curl after updateConfig when started with empty allowlist', async () => {
     if (skipIfNotLinux()) {
       return
     }
 
-    // Initialize with example.com allowed
+    // Initialize with EMPTY allowlist
     await SandboxManager.initialize({
-      network: { allowedDomains: ['example.com'], deniedDomains: [] },
-      filesystem: { denyRead: [], allowWrite: [], denyWrite: [] },
-    })
-
-    // Update to block
-    SandboxManager.updateConfig({
       network: { allowedDomains: [], deniedDomains: [] },
       filesystem: { denyRead: [], allowWrite: [], denyWrite: [] },
     })
 
-    // Update back to allow
+    // Update config to allow example.com
     SandboxManager.updateConfig({
       network: { allowedDomains: ['example.com'], deniedDomains: [] },
       filesystem: { denyRead: [], allowWrite: [], denyWrite: [] },
     })
 
-    // Request should succeed after final update
+    // Full integration: sandboxed curl should work
     const cmd = await SandboxManager.wrapWithSandbox(
       'curl -s --max-time 5 http://example.com 2>&1',
     )
@@ -437,9 +460,6 @@ describe('SandboxManager.updateConfig integration (wrapWithSandbox)', () => {
   /**
    * This test verifies the core fix: sandbox wrapper should include proxy config
    * even with empty allowlist, enabling dynamic updates.
-   *
-   * Currently FAILS because empty allowlist = no proxy in wrapper.
-   * After fix: wrapper includes proxy, so updateConfig() can enable access later.
    */
   it('should include proxy in sandbox wrapper even with empty allowlist', async () => {
     // Initialize with EMPTY allowlist - this is the bug scenario
@@ -462,36 +482,5 @@ describe('SandboxManager.updateConfig integration (wrapWithSandbox)', () => {
       // Linux uses unix sockets, check for socket paths or proxy env vars
       expect(wrapper).toMatch(/HTTP_PROXY|http_proxy|\.sock/)
     }
-  })
-
-  it('should allow network via curl after updateConfig when started with empty allowlist', async () => {
-    if (skipIfNotLinux()) {
-      return
-    }
-
-    // Initialize with EMPTY allowlist
-    await SandboxManager.initialize({
-      network: { allowedDomains: [], deniedDomains: [] },
-      filesystem: { denyRead: [], allowWrite: [], denyWrite: [] },
-    })
-
-    // Update config to allow example.com
-    SandboxManager.updateConfig({
-      network: { allowedDomains: ['example.com'], deniedDomains: [] },
-      filesystem: { denyRead: [], allowWrite: [], denyWrite: [] },
-    })
-
-    // Full integration: sandboxed curl should work
-    const cmd = await SandboxManager.wrapWithSandbox(
-      'curl -s --max-time 5 http://example.com 2>&1',
-    )
-    const result = spawnSync(cmd, {
-      shell: true,
-      encoding: 'utf8',
-      timeout: 10000,
-    })
-
-    expect(result.status).toBe(0)
-    expect(result.stdout).toContain('Example Domain')
   })
 })

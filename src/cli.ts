@@ -1,55 +1,12 @@
 #!/usr/bin/env node
 import { Command } from 'commander'
 import { SandboxManager } from './index.js'
-import {
-  SandboxRuntimeConfigSchema,
-  type SandboxRuntimeConfig,
-} from './sandbox/sandbox-config.js'
+import type { SandboxRuntimeConfig } from './sandbox/sandbox-config.js'
 import { spawn } from 'child_process'
 import { logForDebugging } from './utils/debug.js'
-import * as fs from 'fs'
+import { loadConfig, watchConfigFile } from './utils/config-loader.js'
 import * as path from 'path'
 import * as os from 'os'
-
-/**
- * Load and validate sandbox configuration from a file
- */
-function loadConfig(filePath: string): SandboxRuntimeConfig | null {
-  try {
-    if (!fs.existsSync(filePath)) {
-      return null
-    }
-    const content = fs.readFileSync(filePath, 'utf-8')
-    if (content.trim() === '') {
-      return null
-    }
-
-    // Parse JSON
-    const parsed = JSON.parse(content)
-
-    // Validate with zod schema
-    const result = SandboxRuntimeConfigSchema.safeParse(parsed)
-
-    if (!result.success) {
-      console.error(`Invalid configuration in ${filePath}:`)
-      result.error.issues.forEach(issue => {
-        const path = issue.path.join('.')
-        console.error(`  - ${path}: ${issue.message}`)
-      })
-      return null
-    }
-
-    return result.data
-  } catch (error) {
-    // Log parse errors to help users debug invalid config files
-    if (error instanceof SyntaxError) {
-      console.error(`Invalid JSON in config file ${filePath}: ${error.message}`)
-    } else {
-      console.error(`Failed to load config from ${filePath}: ${error}`)
-    }
-    return null
-  }
-}
 
 /**
  * Get default config path
@@ -72,55 +29,6 @@ function getDefaultConfig(): SandboxRuntimeConfig {
       allowWrite: [],
       denyWrite: [],
     },
-  }
-}
-
-/**
- * Watch config file for changes and call callback with new config
- * Returns cleanup function to stop watching
- */
-function watchConfigFile(
-  configPath: string,
-  onUpdate: (config: SandboxRuntimeConfig) => void,
-): () => void {
-  // Only watch if file exists
-  if (!fs.existsSync(configPath)) {
-    return () => {} // No-op cleanup
-  }
-
-  let watcher: fs.FSWatcher | null = null
-  let closed = false
-
-  function setupWatcher(): void {
-    if (closed || !fs.existsSync(configPath)) {
-      return
-    }
-
-    watcher = fs.watch(configPath, { persistent: false }, eventType => {
-      logForDebugging(`Config file event: ${eventType}`)
-
-      // On macOS, 'rename' means the file was replaced (new inode)
-      // The watcher becomes stale, so we need to re-establish it
-      if (eventType === 'rename') {
-        watcher?.close()
-        // Small delay to let the filesystem settle, then re-watch
-        setTimeout(() => setupWatcher(), 50)
-      }
-
-      const newConfig = loadConfig(configPath)
-      if (newConfig) {
-        onUpdate(newConfig)
-        logForDebugging(`Config reloaded from ${configPath}`)
-      }
-      // If loadConfig returns null (invalid/deleted), keep old config
-    })
-  }
-
-  setupWatcher()
-
-  return () => {
-    closed = true
-    watcher?.close()
   }
 }
 
