@@ -75,6 +75,55 @@ function getDefaultConfig(): SandboxRuntimeConfig {
   }
 }
 
+/**
+ * Watch config file for changes and call callback with new config
+ * Returns cleanup function to stop watching
+ */
+function watchConfigFile(
+  configPath: string,
+  onUpdate: (config: SandboxRuntimeConfig) => void,
+): () => void {
+  // Only watch if file exists
+  if (!fs.existsSync(configPath)) {
+    return () => {} // No-op cleanup
+  }
+
+  let watcher: fs.FSWatcher | null = null
+  let closed = false
+
+  function setupWatcher(): void {
+    if (closed || !fs.existsSync(configPath)) {
+      return
+    }
+
+    watcher = fs.watch(configPath, { persistent: false }, eventType => {
+      logForDebugging(`Config file event: ${eventType}`)
+
+      // On macOS, 'rename' means the file was replaced (new inode)
+      // The watcher becomes stale, so we need to re-establish it
+      if (eventType === 'rename') {
+        watcher?.close()
+        // Small delay to let the filesystem settle, then re-watch
+        setTimeout(() => setupWatcher(), 50)
+      }
+
+      const newConfig = loadConfig(configPath)
+      if (newConfig) {
+        onUpdate(newConfig)
+        logForDebugging(`Config reloaded from ${configPath}`)
+      }
+      // If loadConfig returns null (invalid/deleted), keep old config
+    })
+  }
+
+  setupWatcher()
+
+  return () => {
+    closed = true
+    watcher?.close()
+  }
+}
+
 async function main(): Promise<void> {
   const program = new Command()
 
@@ -123,6 +172,12 @@ async function main(): Promise<void> {
           // Initialize sandbox with config
           logForDebugging('Initializing sandbox...')
           await SandboxManager.initialize(runtimeConfig)
+
+          // Watch config file for dynamic updates (useful for long-running processes)
+          const stopWatching = watchConfigFile(configPath, newConfig => {
+            SandboxManager.updateConfig(newConfig)
+          })
+          process.on('exit', stopWatching)
 
           // Determine command string based on mode
           let command: string
