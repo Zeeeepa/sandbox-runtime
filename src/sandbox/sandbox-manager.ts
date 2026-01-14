@@ -131,12 +131,35 @@ async function filterNetworkRequest(
   }
 }
 
+/**
+ * Get the MITM proxy socket path for a given host, if configured.
+ * Returns the socket path if the host matches any MITM domain pattern,
+ * otherwise returns undefined.
+ */
+function getMitmSocketPath(host: string): string | undefined {
+  if (!config?.network.mitmProxy) {
+    return undefined
+  }
+
+  const { socketPath, domains } = config.network.mitmProxy
+
+  for (const pattern of domains) {
+    if (matchesDomainPattern(host, pattern)) {
+      logForDebugging(`Host ${host} matches MITM pattern ${pattern}`)
+      return socketPath
+    }
+  }
+
+  return undefined
+}
+
 async function startHttpProxyServer(
   sandboxAskCallback?: SandboxAskCallback,
 ): Promise<number> {
   httpProxyServer = createHttpProxyServer({
     filter: (port: number, host: string) =>
       filterNetworkRequest(port, host, sandboxAskCallback),
+    getMitmSocketPath,
   })
 
   return new Promise<number>((resolve, reject) => {
