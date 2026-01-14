@@ -4,7 +4,9 @@ import { SandboxManager } from './index.js'
 import type { SandboxRuntimeConfig } from './sandbox/sandbox-config.js'
 import { spawn } from 'child_process'
 import { logForDebugging } from './utils/debug.js'
-import { loadConfig, watchConfigFile } from './utils/config-loader.js'
+import { loadConfig, loadConfigFromString } from './utils/config-loader.js'
+import * as readline from 'readline'
+import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
 
@@ -54,11 +56,21 @@ async function main(): Promise<void> {
       '-c <command>',
       'run command string directly (like sh -c), no escaping applied',
     )
+    .option(
+      '--control-fd <fd>',
+      'read config updates from file descriptor (JSON lines protocol)',
+      parseInt,
+    )
     .allowUnknownOption()
     .action(
       async (
         commandArgs: string[],
-        options: { debug?: boolean; settings?: string; c?: string },
+        options: {
+          debug?: boolean
+          settings?: string
+          c?: string
+          controlFd?: number
+        },
       ) => {
         try {
           // Enable debug logging if requested
@@ -81,11 +93,51 @@ async function main(): Promise<void> {
           logForDebugging('Initializing sandbox...')
           await SandboxManager.initialize(runtimeConfig)
 
-          // Watch config file for dynamic updates (useful for long-running processes)
-          const stopWatching = watchConfigFile(configPath, newConfig => {
-            SandboxManager.updateConfig(newConfig)
+          // Set up control fd for dynamic config updates if specified
+          let controlReader: readline.Interface | null = null
+          if (options.controlFd !== undefined) {
+            try {
+              const controlStream = fs.createReadStream('', {
+                fd: options.controlFd,
+              })
+              controlReader = readline.createInterface({
+                input: controlStream,
+                crlfDelay: Infinity,
+              })
+
+              controlReader.on('line', line => {
+                const newConfig = loadConfigFromString(line)
+                if (newConfig) {
+                  logForDebugging(
+                    `Config updated from control fd: ${JSON.stringify(newConfig)}`,
+                  )
+                  SandboxManager.updateConfig(newConfig)
+                } else if (line.trim()) {
+                  // Only log non-empty lines that failed to parse
+                  logForDebugging(
+                    `Invalid config on control fd (ignored): ${line}`,
+                  )
+                }
+              })
+
+              controlReader.on('error', err => {
+                logForDebugging(`Control fd error: ${err.message}`)
+              })
+
+              logForDebugging(
+                `Listening for config updates on fd ${options.controlFd}`,
+              )
+            } catch (err) {
+              logForDebugging(
+                `Failed to open control fd ${options.controlFd}: ${err instanceof Error ? err.message : String(err)}`,
+              )
+            }
+          }
+
+          // Cleanup control reader on exit
+          process.on('exit', () => {
+            controlReader?.close()
           })
-          process.on('exit', stopWatching)
 
           // Determine command string based on mode
           let command: string
