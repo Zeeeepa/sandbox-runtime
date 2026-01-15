@@ -56,6 +56,20 @@ const domainPatternSchema = z.string().refine(
 const filesystemPathSchema = z.string().min(1, 'Path cannot be empty')
 
 /**
+ * Schema for MITM proxy configuration
+ * Allows routing specific domains through an upstream MITM proxy via Unix socket
+ */
+const MitmProxyConfigSchema = z.object({
+  socketPath: z.string().min(1).describe('Unix socket path to the MITM proxy'),
+  domains: z
+    .array(domainPatternSchema)
+    .min(1)
+    .describe(
+      'Domains to route through the MITM proxy (e.g., ["api.example.com", "*.internal.org"])',
+    ),
+})
+
+/**
  * Network configuration schema for validation
  */
 export const NetworkConfigSchema = z.object({
@@ -97,6 +111,9 @@ export const NetworkConfigSchema = z.object({
     .describe(
       'Port of an external SOCKS proxy to use instead of starting a local one. When provided, the library will skip starting its own SOCKS proxy and use this port. The external proxy must handle domain filtering.',
     ),
+  mitmProxy: MitmProxyConfigSchema.optional().describe(
+    'Optional MITM proxy configuration. Routes matching domains through an upstream proxy via Unix socket while SRT still handles allow/deny filtering.',
+  ),
 })
 
 /**
@@ -193,6 +210,7 @@ export const SandboxRuntimeConfigSchema = z.object({
 })
 
 // Export inferred types
+export type MitmProxyConfig = z.infer<typeof MitmProxyConfigSchema>
 export type NetworkConfig = z.infer<typeof NetworkConfigSchema>
 export type FilesystemConfig = z.infer<typeof FilesystemConfigSchema>
 export type IgnoreViolationsConfig = z.infer<
