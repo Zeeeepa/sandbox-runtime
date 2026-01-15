@@ -161,8 +161,12 @@ async function main(): Promise<void> {
           // Handle process exit
           child.on('exit', (code, signal) => {
             if (signal) {
-              console.error(`Process killed by signal: ${signal}`)
-              process.exit(1)
+              if (signal === 'SIGINT' || signal === 'SIGTERM') {
+                process.exit(0)
+              } else {
+                console.error(`Process killed by signal: ${signal}`)
+                process.exit(1)
+              }
             }
             process.exit(code ?? 0)
           })
