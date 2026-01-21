@@ -32,3 +32,7 @@ export type { SandboxViolationEvent } from './sandbox/macos-sandbox-utils.js'
 
 // Utility functions
 export { getDefaultWritePaths } from './sandbox/sandbox-utils.js'
+
+// Platform utilities
+export { getWslVersion } from './utils/platform.js'
+export type { Platform } from './utils/platform.js'
