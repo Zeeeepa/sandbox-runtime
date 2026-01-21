@@ -3,7 +3,7 @@ import { createSocksProxyServer } from './socks-proxy.js'
 import type { SocksProxyWrapper } from './socks-proxy.js'
 import { logForDebugging } from '../utils/debug.js'
 import { cloneDeep } from 'lodash-es'
-import { getPlatform, type Platform } from '../utils/platform.js'
+import { getPlatform, getWslVersion } from '../utils/platform.js'
 import * as fs from 'fs'
 import type { SandboxRuntimeConfig } from './sandbox-config.js'
 import type {
@@ -49,6 +49,7 @@ let initializationPromise: Promise<HostNetworkManagerContext> | undefined
 let cleanupRegistered = false
 let logMonitorShutdown: (() => void) | undefined
 const sandboxViolationStore = new SandboxViolationStore()
+
 // ============================================================================
 // Private Helper Functions (not exported)
 // ============================================================================
@@ -314,9 +315,13 @@ async function initialize(
   await initializationPromise
 }
 
-function isSupportedPlatform(platform: Platform): boolean {
-  const supportedPlatforms: Platform[] = ['macos', 'linux']
-  return supportedPlatforms.includes(platform)
+function isSupportedPlatform(): boolean {
+  const platform = getPlatform()
+  if (platform === 'linux') {
+    // WSL1 doesn't support bubblewrap
+    return getWslVersion() !== '1'
+  }
+  return platform === 'macos'
 }
 
 function isSandboxingEnabled(): boolean {
@@ -333,10 +338,8 @@ function checkDependencies(ripgrepConfig?: {
   command: string
   args?: string[]
 }): boolean {
-  const platform = getPlatform()
-
   // Check platform support
-  if (!isSupportedPlatform(platform)) {
+  if (!isSupportedPlatform()) {
     return false
   }
 
@@ -357,6 +360,7 @@ function checkDependencies(ripgrepConfig?: {
   }
 
   // Platform-specific dependency checks
+  const platform = getPlatform()
   if (platform === 'linux') {
     const allowAllUnixSockets = config?.network?.allowAllUnixSockets ?? false
     const seccompConfig = config?.seccomp
@@ -372,12 +376,12 @@ function getFsReadConfig(): FsReadRestrictionConfig {
     return { denyOnly: [] }
   }
 
-  // Filter out glob patterns on Linux
+  // Filter out glob patterns on Linux/WSL (bubblewrap doesn't support globs)
   const denyPaths = config.filesystem.denyRead
     .map(path => removeTrailingGlobSuffix(path))
     .filter(path => {
       if (getPlatform() === 'linux' && containsGlobChars(path)) {
-        logForDebugging(`Skipping glob pattern on Linux: ${path}`)
+        logForDebugging(`Skipping glob pattern on Linux/WSL: ${path}`)
         return false
       }
       return true
@@ -393,23 +397,23 @@ function getFsWriteConfig(): FsWriteRestrictionConfig {
     return { allowOnly: getDefaultWritePaths(), denyWithinAllow: [] }
   }
 
-  // Filter out glob patterns on Linux for allowWrite
+  // Filter out glob patterns on Linux/WSL for allowWrite (bubblewrap doesn't support globs)
   const allowPaths = config.filesystem.allowWrite
     .map(path => removeTrailingGlobSuffix(path))
     .filter(path => {
       if (getPlatform() === 'linux' && containsGlobChars(path)) {
-        logForDebugging(`Skipping glob pattern on Linux: ${path}`)
+        logForDebugging(`Skipping glob pattern on Linux/WSL: ${path}`)
         return false
       }
       return true
     })
 
-  // Filter out glob patterns on Linux for denyWrite
+  // Filter out glob patterns on Linux/WSL for denyWrite (bubblewrap doesn't support globs)
   const denyPaths = config.filesystem.denyWrite
     .map(path => removeTrailingGlobSuffix(path))
     .filter(path => {
       if (getPlatform() === 'linux' && containsGlobChars(path)) {
-        logForDebugging(`Skipping glob pattern on Linux: ${path}`)
+        logForDebugging(`Skipping glob pattern on Linux/WSL: ${path}`)
         return false
       }
       return true
@@ -833,7 +837,7 @@ function annotateStderrWithSandboxFailures(
  * Patterns ending with /** are excluded since they work as subpaths.
  */
 function getLinuxGlobPatternWarnings(): string[] {
-  // Only warn on Linux
+  // Only warn on Linux/WSL (bubblewrap doesn't support globs)
   // macOS supports glob patterns via regex conversion
   if (getPlatform() !== 'linux' || !config) {
     return []
@@ -874,7 +878,7 @@ export interface ISandboxManager {
     sandboxAskCallback?: SandboxAskCallback,
     enableLogMonitor?: boolean,
   ): Promise<void>
-  isSupportedPlatform(platform: Platform): boolean
+  isSupportedPlatform(): boolean
   isSandboxingEnabled(): boolean
   checkDependencies(ripgrepConfig?: {
     command: string
