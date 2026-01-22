@@ -165,6 +165,8 @@ export function getPreGeneratedBpfPath(
   return result
 }
 
+// NOTE: This is a slow operation (synchronous fs lookups + execSync). Ensure calls
+// are memoized at the top level rather than invoked repeatedly.
 function findBpfPath(seccompBinaryPath?: string): string | null {
   // Check explicit path first (highest priority)
   if (seccompBinaryPath) {
