@@ -259,51 +259,77 @@ function registerSeccompCleanupHandler(): void {
 }
 
 /**
- * Check if Linux sandbox dependencies are available (synchronous)
- * Returns true if bwrap and socat are installed.
+ * Detailed status of Linux sandbox dependencies
  */
-export function hasLinuxSandboxDependenciesSync(
-  allowAllUnixSockets = false,
-  seccompConfig?: { bpfPath?: string; applyPath?: string },
-): boolean {
-  try {
-    const bwrapResult = spawnSync('which', ['bwrap'], {
-      stdio: 'ignore',
-      timeout: 1000,
-    })
-    const socatResult = spawnSync('which', ['socat'], {
-      stdio: 'ignore',
-      timeout: 1000,
-    })
+export type LinuxDependencyStatus = {
+  hasBwrap: boolean
+  hasSocat: boolean
+  hasSeccompBpf: boolean
+  hasSeccompApply: boolean
+}
 
-    const hasBasicDeps = bwrapResult.status === 0 && socatResult.status === 0
+/**
+ * Result of checking sandbox dependencies
+ */
+export type SandboxDependencyCheck = {
+  warnings: string[]
+  errors: string[]
+}
 
-    // Check for seccomp dependencies (optional security feature)
-    if (!allowAllUnixSockets) {
-      // Check if we have a pre-generated BPF filter for this architecture
-      const hasPreGeneratedBpf =
-        getPreGeneratedBpfPath(seccompConfig?.bpfPath) !== null
+/**
+ * Get detailed status of Linux sandbox dependencies
+ */
+export function getLinuxDependencyStatus(seccompConfig?: {
+  bpfPath?: string
+  applyPath?: string
+}): LinuxDependencyStatus {
+  const bwrapResult = spawnSync('which', ['bwrap'], {
+    stdio: 'ignore',
+    timeout: 1000,
+  })
+  const socatResult = spawnSync('which', ['socat'], {
+    stdio: 'ignore',
+    timeout: 1000,
+  })
 
-      // Check if we have the apply-seccomp binary for this architecture
-      const hasApplySeccompBinary =
-        getApplySeccompBinaryPath(seccompConfig?.applyPath) !== null
-
-      if (!hasPreGeneratedBpf || !hasApplySeccompBinary) {
-        // Seccomp not available - log warning but continue with basic sandbox
-        // The sandbox will gracefully fall back to allowAllUnixSockets mode
-        logForDebugging(
-          `[Sandbox Linux] Seccomp filtering not available (missing binaries for ${process.arch}). ` +
-            `Sandbox will run without Unix socket blocking (allowAllUnixSockets mode). ` +
-            `This is less restrictive but still provides filesystem and network isolation.`,
-          { level: 'warn' },
-        )
-      }
-    }
-
-    return hasBasicDeps
-  } catch {
-    return false
+  return {
+    hasBwrap: bwrapResult.status === 0,
+    hasSocat: socatResult.status === 0,
+    hasSeccompBpf: getPreGeneratedBpfPath(seccompConfig?.bpfPath) !== null,
+    hasSeccompApply:
+      getApplySeccompBinaryPath(seccompConfig?.applyPath) !== null,
   }
+}
+
+/**
+ * Check sandbox dependencies and return structured result
+ */
+export function checkLinuxDependencies(seccompConfig?: {
+  bpfPath?: string
+  applyPath?: string
+}): SandboxDependencyCheck {
+  const errors: string[] = []
+  const warnings: string[] = []
+
+  const bwrap = spawnSync('which', ['bwrap'], {
+    stdio: 'ignore',
+    timeout: 1000,
+  })
+  const socat = spawnSync('which', ['socat'], {
+    stdio: 'ignore',
+    timeout: 1000,
+  })
+
+  if (bwrap.status !== 0) errors.push('bubblewrap (bwrap) not installed')
+  if (socat.status !== 0) errors.push('socat not installed')
+
+  const hasBpf = getPreGeneratedBpfPath(seccompConfig?.bpfPath) !== null
+  const hasApply = getApplySeccompBinaryPath(seccompConfig?.applyPath) !== null
+  if (!hasBpf || !hasApply) {
+    warnings.push('seccomp not available - unix socket access not restricted')
+  }
+
+  return { warnings, errors }
 }
 
 /**
@@ -730,7 +756,7 @@ async function generateFilesystemArgs(
  * - Other architectures are not currently supported (no apply-seccomp binary available)
  * - To use sandboxing without Unix socket blocking on unsupported architectures,
  *   set allowAllUnixSockets: true in your configuration
- * Dependencies are checked by hasLinuxSandboxDependenciesSync() before enabling the sandbox.
+ * Dependencies are checked by checkLinuxDependencies() before enabling the sandbox.
  */
 export async function wrapCommandWithSandboxLinux(
   params: LinuxSandboxParams,
@@ -781,15 +807,19 @@ export async function wrapCommandWithSandboxLinux(
     if (!allowAllUnixSockets) {
       seccompFilterPath =
         generateSeccompFilter(seccompConfig?.bpfPath) ?? undefined
-      if (!seccompFilterPath) {
-        // Seccomp not available - log warning and continue without it
-        // This provides graceful degradation on systems without seccomp binaries
+      const applySeccompBinary = getApplySeccompBinaryPath(
+        seccompConfig?.applyPath,
+      )
+
+      if (!seccompFilterPath || !applySeccompBinary) {
+        // Seccomp binaries not found - warn but continue without unix socket blocking
         logForDebugging(
-          '[Sandbox Linux] Seccomp filter not available (missing binaries). ' +
-            'Continuing without Unix socket blocking - sandbox will still provide ' +
-            'filesystem and network isolation but Unix sockets will be allowed.',
+          '[Sandbox Linux] Seccomp binaries not available - unix socket blocking disabled. ' +
+            'Install @anthropic-ai/sandbox-runtime globally for full protection.',
           { level: 'warn' },
         )
+        // Clear the filter path so we don't try to use it
+        seccompFilterPath = undefined
       } else {
         // Track filter for cleanup and register exit handler
         // Only track runtime-generated filters (not pre-generated ones from vendor/)
@@ -802,7 +832,7 @@ export async function wrapCommandWithSandboxLinux(
           '[Sandbox Linux] Generated seccomp BPF filter for Unix socket blocking',
         )
       }
-    } else if (allowAllUnixSockets) {
+    } else {
       logForDebugging(
         '[Sandbox Linux] Skipping seccomp filter - allowAllUnixSockets is enabled',
       )

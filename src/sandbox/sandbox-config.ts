@@ -82,12 +82,14 @@ export const NetworkConfigSchema = z.object({
   allowUnixSockets: z
     .array(z.string())
     .optional()
-    .describe('Unix socket paths that are allowed (macOS only)'),
+    .describe(
+      'macOS only: Unix socket paths to allow. Ignored on Linux (seccomp cannot filter by path).',
+    ),
   allowAllUnixSockets: z
     .boolean()
     .optional()
     .describe(
-      'Allow ALL Unix sockets (Linux only - disables Unix socket blocking)',
+      'If true, allow all Unix sockets (disables blocking on both platforms).',
     ),
   allowLocalBinding: z
     .boolean()

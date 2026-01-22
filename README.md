@@ -283,8 +283,19 @@ Uses an **allow-only pattern** - all network access is denied by default.
 
 - `network.allowedDomains` - Array of allowed domains (supports wildcards like `*.example.com`). Empty array = no network access.
 - `network.deniedDomains` - Array of denied domains (checked first, takes precedence over allowedDomains)
-- `network.allowUnixSockets` - Array of Unix socket paths that can be accessed (macOS only)
 - `network.allowLocalBinding` - Allow binding to local ports (boolean, default: false)
+
+**Unix Socket Settings** (platform-specific behavior):
+
+| Setting | macOS | Linux |
+|---------|-------|-------|
+| `allowUnixSockets: string[]` | Allowlist of socket paths | *Ignored* (seccomp can't filter by path) |
+| `allowAllUnixSockets: boolean` | Allow all sockets | Disable seccomp blocking |
+
+Unix sockets are **blocked by default** on both platforms.
+
+- **macOS**: Use `allowUnixSockets` to allow specific paths (e.g., `["/var/run/docker.sock"]`), or `allowAllUnixSockets: true` to allow all.
+- **Linux**: Blocking uses seccomp filters (x64/arm64 only). If seccomp isn't available, sockets are unrestricted and a warning is shown. Use `allowAllUnixSockets: true` to explicitly disable blocking.
 
 #### Filesystem Configuration
 
