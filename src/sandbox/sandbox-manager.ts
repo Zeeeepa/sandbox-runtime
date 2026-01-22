@@ -5,6 +5,7 @@ import { logForDebugging } from '../utils/debug.js'
 import { cloneDeep } from 'lodash-es'
 import { getPlatform, getWslVersion } from '../utils/platform.js'
 import * as fs from 'fs'
+import { spawnSync } from 'child_process'
 import type { SandboxRuntimeConfig } from './sandbox-config.js'
 import type {
   SandboxAskCallback,
@@ -323,20 +324,38 @@ function isSandboxingEnabled(): boolean {
 
 /**
  * Check sandbox dependencies for the current platform
+ * @param ripgrepConfig - Ripgrep command to check. If not provided, uses config from initialization or defaults to 'rg'
  * @returns { warnings, errors } - errors mean sandbox cannot run, warnings mean degraded functionality
  */
-function checkDependencies(): SandboxDependencyCheck {
+function checkDependencies(ripgrepConfig?: {
+  command: string
+  args?: string[]
+}): SandboxDependencyCheck {
   if (!isSupportedPlatform()) {
     return { errors: ['Unsupported platform'], warnings: [] }
   }
 
-  const platform = getPlatform()
-  if (platform === 'linux') {
-    return checkLinuxDependencies(config?.seccomp)
+  const errors: string[] = []
+  const warnings: string[] = []
+
+  // Check ripgrep - use provided config, then initialized config, then default 'rg'
+  const rgToCheck = ripgrepConfig ?? config?.ripgrep ?? { command: 'rg' }
+  const rgResult = spawnSync('which', [rgToCheck.command], {
+    stdio: 'ignore',
+    timeout: 1000,
+  })
+  if (rgResult.status !== 0) {
+    errors.push(`ripgrep (${rgToCheck.command}) not found`)
   }
 
-  // macOS uses built-in sandbox-exec, no system dependencies needed
-  return { errors: [], warnings: [] }
+  const platform = getPlatform()
+  if (platform === 'linux') {
+    const linuxDeps = checkLinuxDependencies(config?.seccomp)
+    errors.push(...linuxDeps.errors)
+    warnings.push(...linuxDeps.warnings)
+  }
+
+  return { errors, warnings }
 }
 
 function getFsReadConfig(): FsReadRestrictionConfig {
@@ -848,7 +867,10 @@ export interface ISandboxManager {
   ): Promise<void>
   isSupportedPlatform(): boolean
   isSandboxingEnabled(): boolean
-  checkDependencies(): SandboxDependencyCheck
+  checkDependencies(ripgrepConfig?: {
+    command: string
+    args?: string[]
+  }): SandboxDependencyCheck
   getFsReadConfig(): FsReadRestrictionConfig
   getFsWriteConfig(): FsWriteRestrictionConfig
   getNetworkRestrictionConfig(): NetworkRestrictionConfig
