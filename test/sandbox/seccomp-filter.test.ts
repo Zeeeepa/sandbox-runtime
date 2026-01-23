@@ -10,7 +10,7 @@ import {
 } from '../../src/sandbox/generate-seccomp-filter.js'
 import {
   wrapCommandWithSandboxLinux,
-  hasLinuxSandboxDependenciesSync,
+  checkLinuxDependencies,
 } from '../../src/sandbox/linux-sandbox-utils.js'
 
 function skipIfNotLinux(): boolean {
@@ -27,11 +27,12 @@ describe('Linux Sandbox Dependencies', () => {
       return
     }
 
-    const hasDeps = hasLinuxSandboxDependenciesSync()
-    expect(typeof hasDeps).toBe('boolean')
+    const depCheck = checkLinuxDependencies()
+    expect(depCheck).toHaveProperty('errors')
+    expect(depCheck).toHaveProperty('warnings')
 
-    // Should always check for bwrap and socat
-    if (hasDeps) {
+    // If no errors, bwrap and socat should be available
+    if (depCheck.errors.length === 0) {
       const bwrapResult = spawnSync('which', ['bwrap'], { stdio: 'ignore' })
       const socatResult = spawnSync('which', ['socat'], { stdio: 'ignore' })
       expect(bwrapResult.status).toBe(0)
@@ -50,12 +51,7 @@ describe('Pre-generated BPF Support', () => {
     const arch = process.arch
     const preGeneratedBpf = getPreGeneratedBpfPath()
 
-    if (
-      arch === 'x64' ||
-      arch === 'x86_64' ||
-      arch === 'arm64' ||
-      arch === 'aarch64'
-    ) {
+    if (arch === 'x64' || arch === 'arm64') {
       // Should have pre-generated BPF for these architectures
       expect(preGeneratedBpf).toBeTruthy()
       if (preGeneratedBpf) {
@@ -81,11 +77,11 @@ describe('Pre-generated BPF Support', () => {
       return
     }
 
-    // hasLinuxSandboxDependenciesSync should succeed on x64/arm64
-    // with just bwrap and socat (pre-built binaries included)
-    const hasSandboxDeps = hasLinuxSandboxDependenciesSync()
+    // checkLinuxDependencies should report no errors on x64/arm64
+    // with bwrap and socat installed (pre-built binaries included)
+    const depCheck = checkLinuxDependencies()
 
-    // On x64/arm64 with pre-built binaries, we should have sandbox deps
+    // On x64/arm64 with pre-built binaries, we should have no errors
     const bwrapResult = spawnSync('which', ['bwrap'], { stdio: 'ignore' })
     const socatResult = spawnSync('which', ['socat'], { stdio: 'ignore' })
     const hasApplySeccomp = getApplySeccompBinaryPath() !== null
@@ -99,7 +95,8 @@ describe('Pre-generated BPF Support', () => {
       // (pre-built apply-seccomp binaries and BPF filters are included)
       const arch = process.arch
       if (arch === 'x64' || arch === 'arm64') {
-        expect(hasSandboxDeps).toBe(true)
+        expect(depCheck.errors).toHaveLength(0)
+        expect(depCheck.warnings).toHaveLength(0)
       }
     }
   })
@@ -117,20 +114,18 @@ describe('Pre-generated BPF Support', () => {
     }
 
     // On architectures without pre-built apply-seccomp binaries,
-    // hasLinuxSandboxDependenciesSync() should return false
-    // (unless allowAllUnixSockets is set to true)
-    const hasSandboxDeps = hasLinuxSandboxDependenciesSync(false)
+    // checkLinuxDependencies() should return warnings about missing seccomp
+    const depCheck = checkLinuxDependencies()
 
-    // Unsupported architectures should not have sandbox deps when seccomp is required
-    expect(hasSandboxDeps).toBe(false)
+    // Unsupported architectures should have seccomp warnings
+    expect(depCheck.warnings.length).toBeGreaterThan(0)
 
-    // But should work when allowAllUnixSockets is true
-    const hasSandboxDepsWithBypass = hasLinuxSandboxDependenciesSync(true)
+    // But bwrap+socat should still be available (no errors) if installed
     const bwrapResult = spawnSync('which', ['bwrap'], { stdio: 'ignore' })
     const socatResult = spawnSync('which', ['socat'], { stdio: 'ignore' })
 
     if (bwrapResult.status === 0 && socatResult.status === 0) {
-      expect(hasSandboxDepsWithBypass).toBe(true)
+      expect(depCheck.errors).toHaveLength(0)
     }
   })
 })
@@ -142,12 +137,7 @@ describe('Seccomp Filter (Pre-generated)', () => {
     }
 
     const arch = process.arch
-    if (
-      arch !== 'x64' &&
-      arch !== 'arm64' &&
-      arch !== 'x86_64' &&
-      arch !== 'aarch64'
-    ) {
+    if (arch !== 'x64' && arch !== 'arm64') {
       // Not a supported architecture
       return
     }
@@ -175,12 +165,7 @@ describe('Seccomp Filter (Pre-generated)', () => {
     }
 
     const arch = process.arch
-    if (
-      arch !== 'x64' &&
-      arch !== 'arm64' &&
-      arch !== 'x86_64' &&
-      arch !== 'aarch64'
-    ) {
+    if (arch !== 'x64' && arch !== 'arm64') {
       return
     }
 
@@ -200,12 +185,7 @@ describe('Seccomp Filter (Pre-generated)', () => {
     }
 
     const arch = process.arch
-    if (
-      arch === 'x64' ||
-      arch === 'arm64' ||
-      arch === 'x86_64' ||
-      arch === 'aarch64'
-    ) {
+    if (arch === 'x64' || arch === 'arm64') {
       // This test is for unsupported architectures only
       return
     }
@@ -235,12 +215,7 @@ describe('Apply Seccomp Binary', () => {
     }
 
     const arch = process.arch
-    if (
-      arch !== 'x64' &&
-      arch !== 'arm64' &&
-      arch !== 'x86_64' &&
-      arch !== 'aarch64'
-    ) {
+    if (arch !== 'x64' && arch !== 'arm64') {
       return
     }
 
@@ -260,12 +235,7 @@ describe('Apply Seccomp Binary', () => {
     }
 
     const arch = process.arch
-    if (
-      arch === 'x64' ||
-      arch === 'arm64' ||
-      arch === 'x86_64' ||
-      arch === 'aarch64'
-    ) {
+    if (arch === 'x64' || arch === 'arm64') {
       return
     }
 
@@ -285,9 +255,9 @@ describe('Architecture Support', () => {
     // check instead of silently running without seccomp protection
 
     // The actual check happens in:
-    // 1. hasLinuxSandboxDependenciesSync() checks for apply-seccomp binary availability
-    // 2. Returns false if binary not available for the current architecture
-    // 3. Error messages guide users to set allowAllUnixSockets: true
+    // 1. checkLinuxDependencies() checks for apply-seccomp binary availability
+    // 2. Returns warnings if binary not available for the current architecture
+    // 3. Caller decides policy (e.g. allowAllUnixSockets bypasses seccomp requirement)
     expect(true).toBe(true) // Placeholder - actual behavior verified by integration tests
   })
 
@@ -338,7 +308,7 @@ describe('USER_TYPE Gating', () => {
       return
     }
 
-    if (!hasLinuxSandboxDependenciesSync()) {
+    if (checkLinuxDependencies().errors.length > 0) {
       return
     }
 
@@ -487,7 +457,7 @@ describe('Two-Stage Seccomp Application', () => {
       return
     }
 
-    if (!hasLinuxSandboxDependenciesSync()) {
+    if (checkLinuxDependencies().errors.length > 0) {
       return
     }
 
@@ -517,7 +487,7 @@ describe('Two-Stage Seccomp Application', () => {
       return
     }
 
-    if (!hasLinuxSandboxDependenciesSync()) {
+    if (checkLinuxDependencies().errors.length > 0) {
       return
     }
 
@@ -545,7 +515,7 @@ describe('Sandbox Integration', () => {
       return
     }
 
-    if (!hasLinuxSandboxDependenciesSync()) {
+    if (checkLinuxDependencies().errors.length > 0) {
       return
     }
 
@@ -565,7 +535,7 @@ describe('Sandbox Integration', () => {
       return
     }
 
-    if (!hasLinuxSandboxDependenciesSync()) {
+    if (checkLinuxDependencies().errors.length > 0) {
       return
     }
 
@@ -588,7 +558,7 @@ describe('Sandbox Integration', () => {
       return
     }
 
-    if (!hasLinuxSandboxDependenciesSync()) {
+    if (checkLinuxDependencies().errors.length > 0) {
       return
     }
 
@@ -698,7 +668,7 @@ describe('Custom Seccomp Paths (expectedPath parameter)', () => {
       return
     }
 
-    if (!hasLinuxSandboxDependenciesSync()) {
+    if (checkLinuxDependencies().errors.length > 0) {
       return
     }
 
@@ -727,7 +697,7 @@ describe('Custom Seccomp Paths (expectedPath parameter)', () => {
       return
     }
 
-    if (!hasLinuxSandboxDependenciesSync()) {
+    if (checkLinuxDependencies().errors.length > 0) {
       return
     }
 
