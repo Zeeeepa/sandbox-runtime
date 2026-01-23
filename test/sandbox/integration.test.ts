@@ -97,7 +97,8 @@ describe('Sandbox Integration Tests', () => {
       socketServer!.on('error', reject)
     })
 
-    // Initialize sandbox
+    // Initialize sandbox (reset first to ensure clean state)
+    await SandboxManager.reset()
     await SandboxManager.initialize(createTestConfig(TEST_DIR))
   })
 

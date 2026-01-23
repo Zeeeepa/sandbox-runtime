@@ -5,6 +5,7 @@ import { logForDebugging } from '../utils/debug.js'
 import { cloneDeep } from 'lodash-es'
 import { getPlatform, getWslVersion } from '../utils/platform.js'
 import * as fs from 'fs'
+import { spawnSync } from 'child_process'
 import type { SandboxRuntimeConfig } from './sandbox-config.js'
 import type {
   SandboxAskCallback,
@@ -16,7 +17,8 @@ import {
   wrapCommandWithSandboxLinux,
   initializeLinuxNetworkBridge,
   type LinuxNetworkBridgeContext,
-  hasLinuxSandboxDependenciesSync,
+  checkLinuxDependencies,
+  type SandboxDependencyCheck,
 } from './linux-sandbox-utils.js'
 import {
   wrapCommandWithSandboxMacOS,
@@ -27,7 +29,6 @@ import {
   containsGlobChars,
   removeTrailingGlobSuffix,
 } from './sandbox-utils.js'
-import { hasRipgrepSync } from '../utils/ripgrep.js'
 import { SandboxViolationStore } from './sandbox-violation-store.js'
 import { EOL } from 'node:os'
 
@@ -230,20 +231,12 @@ async function initialize(
   // Store config for use by other functions
   config = runtimeConfig
 
-  // Check dependencies now that we have config with ripgrep info
-  if (!checkDependencies()) {
-    const platform = getPlatform()
-    let errorMessage = 'Sandbox dependencies are not available on this system.'
-
-    if (platform === 'linux') {
-      errorMessage += ' Required: ripgrep (rg), bubblewrap (bwrap), and socat.'
-    } else if (platform === 'macos') {
-      errorMessage += ' Required: ripgrep (rg).'
-    } else {
-      errorMessage += ` Platform '${platform}' is not supported.`
-    }
-
-    throw new Error(errorMessage)
+  // Check dependencies
+  const deps = checkDependencies()
+  if (deps.errors.length > 0) {
+    throw new Error(
+      `Sandbox dependencies not available: ${deps.errors.join(', ')}`,
+    )
   }
 
   // Start log monitor for macOS if enabled
@@ -330,45 +323,39 @@ function isSandboxingEnabled(): boolean {
 }
 
 /**
- * Check if all sandbox dependencies are available for the current platform
- * @param ripgrepConfig - Optional ripgrep configuration to check. If not provided, uses config from initialization or defaults to 'rg'
- * @returns true if all dependencies are available, false otherwise
+ * Check sandbox dependencies for the current platform
+ * @param ripgrepConfig - Ripgrep command to check. If not provided, uses config from initialization or defaults to 'rg'
+ * @returns { warnings, errors } - errors mean sandbox cannot run, warnings mean degraded functionality
  */
 function checkDependencies(ripgrepConfig?: {
   command: string
   args?: string[]
-}): boolean {
-  // Check platform support
+}): SandboxDependencyCheck {
   if (!isSupportedPlatform()) {
-    return false
+    return { errors: ['Unsupported platform'], warnings: [] }
   }
 
-  // Determine which ripgrep to check:
-  // 1. Parameter takes precedence
-  // 2. Then config from initialization
-  // 3. Finally default to 'rg'
-  const rgToCheck = ripgrepConfig ?? config?.ripgrep
+  const errors: string[] = []
+  const warnings: string[] = []
 
-  // Check ripgrep - only check 'rg' if no custom command is configured
-  // If custom command is provided, we trust it exists (will fail naturally if not)
-  const hasCustomRipgrep = rgToCheck?.command !== undefined
-  if (!hasCustomRipgrep) {
-    // Only check for default 'rg' command
-    if (!hasRipgrepSync()) {
-      return false
-    }
+  // Check ripgrep - use provided config, then initialized config, then default 'rg'
+  const rgToCheck = ripgrepConfig ?? config?.ripgrep ?? { command: 'rg' }
+  const rgResult = spawnSync('which', [rgToCheck.command], {
+    stdio: 'ignore',
+    timeout: 1000,
+  })
+  if (rgResult.status !== 0) {
+    errors.push(`ripgrep (${rgToCheck.command}) not found`)
   }
 
-  // Platform-specific dependency checks
   const platform = getPlatform()
   if (platform === 'linux') {
-    const allowAllUnixSockets = config?.network?.allowAllUnixSockets ?? false
-    const seccompConfig = config?.seccomp
-    return hasLinuxSandboxDependenciesSync(allowAllUnixSockets, seccompConfig)
+    const linuxDeps = checkLinuxDependencies(config?.seccomp)
+    errors.push(...linuxDeps.errors)
+    warnings.push(...linuxDeps.warnings)
   }
 
-  // macOS only needs ripgrep (already checked above)
-  return true
+  return { errors, warnings }
 }
 
 function getFsReadConfig(): FsReadRestrictionConfig {
@@ -883,7 +870,7 @@ export interface ISandboxManager {
   checkDependencies(ripgrepConfig?: {
     command: string
     args?: string[]
-  }): boolean
+  }): SandboxDependencyCheck
   getFsReadConfig(): FsReadRestrictionConfig
   getFsWriteConfig(): FsWriteRestrictionConfig
   getNetworkRestrictionConfig(): NetworkRestrictionConfig
